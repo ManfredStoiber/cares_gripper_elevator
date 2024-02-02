@@ -8,6 +8,7 @@ from enum import Enum
 import random
 
 from pathlib import Path
+
 file_path = Path(__file__).parent.resolve()
 
 
@@ -62,7 +63,6 @@ def fixed_goals(object_current_pose, noise_tolerance):
 
 
 def relative_goal(mode, object_current_pose):
-
     if mode == 1:
         diff = 90  # degrees to the right
     elif mode == 2:
@@ -104,6 +104,7 @@ class RotationEnvironment(Environment):
     def __init__(self, env_config: EnvironmentConfig, gripper_config: GripperConfig, object_config: ObjectConfig):
         super().__init__(env_config, gripper_config, object_config)
         self.object_observation_mode = object_config.object_observation_mode
+        self.object_type = object_config.object_type
 
     def get_goal_function(self, object_state):
         """
@@ -141,7 +142,7 @@ class RotationEnvironment(Environment):
         """
         # Log selected goal
         logging.info(f"Goal selection method = {GOAL_SELECTION_METHOD(self.goal_selection_method).name}")
-        
+
         if self.object_type == "servo":
             # random home pos
             home_pos = random.randint(0, 4095)
@@ -154,7 +155,6 @@ class RotationEnvironment(Environment):
             object_state = object_state[-1]
 
         return self.get_goal_function(object_state)
-    
 
     # overriding method
     def reward_function(self, target_goal, yaw_before, yaw_after):
@@ -182,41 +182,19 @@ class RotationEnvironment(Environment):
         done = False
 
         if self.object_observation_mode == "observed":
-            yaw_before_rounded = round(yaw_before[-1])
             yaw_after_rounded = round(yaw_after[-1])
         elif self.object_observation_mode == "actual":
-            yaw_before_rounded = round(yaw_before)
             yaw_after_rounded = round(yaw_after)
 
-        goal_difference_before = self.rotation_min_difference(target_goal, yaw_before_rounded)
         goal_difference_after = self.rotation_min_difference(target_goal, yaw_after_rounded)
-
-        # Current yaw_before might not equal yaw_after in prev step, hence need to check before as well to see if it has reached the goal already
-        if (goal_difference_before <= precision_tolerance):
-            logging.info("----------Reached the Goal!----------")
-            logging.info("Warning: Yaw before in current step not equal to Yaw after in prev step")
-            reward = 10
-            done = True
-            return reward, done
-
-        delta_changes = self.rotation_min_difference(target_goal, yaw_before_rounded) - self.rotation_min_difference(target_goal, yaw_after_rounded)
 
         logging.info(f"Yaw = {yaw_after_rounded}")
 
-        if -self.noise_tolerance <= delta_changes <= self.noise_tolerance:
-            reward = -1
-        else:
-            raw_reward = delta_changes / self.rotation_min_difference(target_goal, yaw_before_rounded)
-            if (raw_reward >= REWARD_CONSTANTS.MAX_REWARD.value):
-                reward = REWARD_CONSTANTS.MAX_REWARD.value
-            elif (raw_reward <= REWARD_CONSTANTS.MIN_REWARD.value):
-                reward = REWARD_CONSTANTS.MIN_REWARD.value
-            else:
-                reward = raw_reward
+        reward = -goal_difference_after/2
 
         if goal_difference_after <= precision_tolerance:
             logging.info("----------Reached the Goal!----------")
-            reward += 10
+            reward += 500
             done = True
 
         return reward, done
@@ -244,7 +222,7 @@ class RotationEnvironment(Environment):
         Returns:
             float: The minimum angular difference.
         """
-        return min(abs(a - b), (360+min(a, b) - max(a, b)))
+        return min(abs(a - b), (360 + min(a, b) - max(a, b)))
 
     def add_goal(self, state):
         """
@@ -258,7 +236,7 @@ class RotationEnvironment(Environment):
         """
         state.append(self.goal_state)
         return state
-    
+
     def get_home_angle(self, home_pos):
         """
         Converts the given home position to its corresponding angle in degrees.
@@ -269,7 +247,7 @@ class RotationEnvironment(Environment):
         Returns:
         Angle corresponding to the provided home position.
         """
-        angle_ratio = 4096/360
+        angle_ratio = 4096 / 360
         # 0 in decimal is 180 degrees so need to add offset
-        home_pos_angle = (home_pos/angle_ratio + 180) % 360
+        home_pos_angle = (home_pos / angle_ratio + 180) % 360
         return home_pos_angle

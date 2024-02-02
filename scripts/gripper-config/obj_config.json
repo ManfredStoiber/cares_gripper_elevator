@@ -1,0 +1,7 @@
+{
+    "object_type": "aruco",
+    "object_observation_mode": "observed",
+    "object_marker_id": 7,
+    "device_name": "/dev/ttyUSB1",
+    "baudrate": 1000000
+}

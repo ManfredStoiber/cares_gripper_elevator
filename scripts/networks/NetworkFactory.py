@@ -37,11 +37,10 @@ def create_DDPG(observation_size, action_num, learning_config, DEVICE):
     return agent
 
 def create_TD3(observation_size, action_num, learning_config, DEVICE):
-    from networks.TD3 import Actor
-    from networks.TD3 import Critic
+    from cares_reinforcement_learning.networks.TD3 import Actor, Critic
 
-    actor  = Actor(observation_size, action_num, learning_config.actor_lr)
-    critic = Critic(observation_size, action_num, learning_config.critic_lr)
+    actor  = Actor(observation_size, action_num)
+    critic = Critic(observation_size, action_num)
 
     agent = TD3(
         actor_network=actor,
@@ -49,6 +48,8 @@ def create_TD3(observation_size, action_num, learning_config, DEVICE):
         gamma=learning_config.gamma,
         tau=learning_config.tau,
         action_num=action_num,
+        actor_lr=learning_config.actor_lr,
+        critic_lr=learning_config.critic_lr,
         device=DEVICE,
     )
     

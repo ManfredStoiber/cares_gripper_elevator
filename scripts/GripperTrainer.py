@@ -25,9 +25,9 @@ else:
     DEVICE = torch.device('cpu')
     logging.info("Working with CPU")
 
-with open('slack_token.txt') as file:
-    slack_token = file.read()
-slack_bot = SlackBot(slack_token=slack_token)
+#with open('slack_token.txt') as file:
+#    slack_token = file.read()
+#slack_bot = SlackBot(slack_token=slack_token)
 
 
 class ALGORITHMS(Enum):
@@ -87,14 +87,14 @@ class GripperTrainer():
         state = self.environment.reset()
 
         logging.info(f"State: {state}")
-        slack_bot.post_message("#bot_terminal", f"#{self.environment.gripper.gripper_id}: Reset Terminal. \nState: {state}")
+        #slack_bot.post_message("#bot_terminal", f"#{self.environment.gripper.gripper_id}: Reset Terminal. \nState: {state}")
 
         # This wont work for multi-dimension arrays
         observation_size = len(state)
         action_num = gripper_config.num_motors
         message = f"Observation Space: {observation_size} Action Space: {action_num}"
         logging.info(message)
-        slack_bot.post_message("#bot_terminal", f"#{self.environment.gripper.gripper_id}: {message}")
+        #slack_bot.post_message("#bot_terminal", f"#{self.environment.gripper.gripper_id}: {message}")
 
         logging.info("Setting up Network")
         network_factory = NetworkFactory()
@@ -125,7 +125,7 @@ class GripperTrainer():
         except (EnvironmentError, GripperError) as error:
             error_message = f"Failed to reset with message: {error}"
             logging.error(error_message)
-            if erh.handle_gripper_error_home(self.environment, error_message, slack_bot, self.file_path):
+            if erh.handle_gripper_error_home(self.environment, error_message, None, self.file_path):
                 return self.environment_reset()  # might keep looping if it keep having issues
             else:
                 self.environment.gripper.close()
@@ -152,7 +152,7 @@ class GripperTrainer():
         except (EnvironmentError, GripperError) as error:
             error_message = f"Failed to step environment with message: {error}"
             logging.error(error_message)
-            if erh.handle_gripper_error_home(self.environment, error_message, slack_bot, self.file_path):
+            if erh.handle_gripper_error_home(self.environment, error_message, None, self.file_path):
                 state = self.environment.get_state()
                 # Truncated should be false to prevent skipping the entire episode
                 return state, 0, False, False
@@ -332,7 +332,7 @@ class GripperTrainer():
                     average_steps_per_episode_message = f"Average Steps Per Episode: {rolling_steps_per_episode_average} over last {steps_per_episode_window_size} episodes\n"
 
                     logging.info(f"\n{average_success_message}{average_reward_message}{average_steps_per_episode_message}")
-                    slack_bot.post_message("#bot_terminal", f"#{self.environment.gripper.gripper_id}: {average_success_message}{average_reward_message}{average_steps_per_episode_message}")
+                    #slack_bot.post_message("#bot_terminal", f"#{self.environment.gripper.gripper_id}: {average_success_message}{average_reward_message}{average_steps_per_episode_message}")
 
         self.environment.gripper.close()
     
@@ -381,7 +381,8 @@ class GripperTrainer():
                 message = f"Running Exploration Steps {total_step_counter}/{self.max_steps_exploration}"
                 logging.info(message)
                 if total_step_counter % 50 == 0:
-                    slack_bot.post_message("#bot_terminal", f"#{self.environment.gripper.gripper_id}: {message}")
+                    #slack_bot.post_message("#bot_terminal", f"#{self.environment.gripper.gripper_id}: {message}")
+                    pass
 
                 action_env = self.environment.sample_action()
                 action = self.environment.normalize(action_env)  # algorithm range [-1, 1]
@@ -439,7 +440,7 @@ class GripperTrainer():
             if done or truncated or episode_timesteps >= self.episode_horizont:
                 message = f"#{self.environment.gripper.gripper_id} - Total T:{total_step_counter + 1} Episode {episode_num + 1} was completed with {episode_timesteps} steps taken and a Reward= {episode_reward:.3f}"
                 logging.info(message)
-                slack_bot.post_message("#bot_terminal", message)
+                #slack_bot.post_message("#bot_terminal", message)
 
                 # --- Storing success data ---
                 if done:
@@ -497,8 +498,8 @@ class GripperTrainer():
                     utils.plot_data(self.file_path, "reward")
                     utils.plot_data(self.file_path, "distance")
 
-                    utils.slack_post_plot(self.environment, slack_bot, self.file_path, plots)
-                    utils.slack_post_plot(self.environment, slack_bot, self.file_path, time_plots)
+                    #utils.slack_post_plot(self.environment, slack_bot, self.file_path, plots)
+                    #utils.slack_post_plot(self.environment, slack_bot, self.file_path, time_plots)
 
                 if episode_num % self.plot_freq == 0:
                     utils.plot_data(self.file_path, "rolling_success_average")
@@ -511,7 +512,7 @@ class GripperTrainer():
                     average_steps_per_episode_message = f"Average Steps Per Episode: {rolling_steps_per_episode_average} over last {steps_per_episode_window_size} episodes\n"
 
                     logging.info(f"\n{average_success_message}{average_reward_message}{average_steps_per_episode_message}")
-                    slack_bot.post_message("#bot_terminal", f"#{self.environment.gripper.gripper_id}: {average_success_message}{average_reward_message}{average_steps_per_episode_message}")
+                    #slack_bot.post_message("#bot_terminal", f"#{self.environment.gripper.gripper_id}: {average_success_message}{average_reward_message}{average_steps_per_episode_message}")
 
         utils.plot_data(self.file_path, plots)
         utils.plot_data_time(self.file_path, "time", "rolling_reward_average", "time")

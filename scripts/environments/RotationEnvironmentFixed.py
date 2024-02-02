@@ -1,5 +1,7 @@
 import cv2
 from environments.Environment import Environment
+from environments.RotationEnvironment import fixed_goals
+from environments.RotationEnvironment import RotationEnvironment
 import logging
 import numpy as np
 
@@ -18,11 +20,22 @@ class TranslationEnvironment(Environment):
 
     # overriding method
     def choose_goal(self):
-        position = self.get_object_state()[0:2]
+        object_state = self.get_object_state()
+
+        position = object_state[0:2]
         position[0] = np.random.randint(-50, 50)
         position[1] = np.random.randint(-70, -40)
 
         return position
+
+        if self.object_observation_mode == "observed":
+            yaw = object_state[-1]
+
+        yaw_goal = fixed_goals(yaw, self.noise_tolerance)
+
+        goal = position + yaw_goal
+
+        return goal
 
     def reward_function(self, target_goal, goal_before, goal_after):
         if goal_before is None:
@@ -34,9 +47,23 @@ class TranslationEnvironment(Environment):
             return 0, True
         done = False
 
-        target_goal = np.array(target_goal[0:2])
-        goal_after_array = np.array(goal_after[0:2])
-        goal_difference = np.linalg.norm(target_goal - goal_after_array)
+        target_goal_position = np.array(target_goal[0:2])
+        target_goal_yaw = np.array(target_goal[-1])
+
+        goal_position_after_array = np.array(goal_after[0:2])
+        goal_position_difference = np.linalg.norm(target_goal_position - goal_position_after_array)
+
+        reward_position = -goal_position_difference
+
+        if self.object_observation_mode == "observed":
+            yaw_after_rounded = round(goal_after[-1])
+        elif self.object_observation_mode == "actual":
+            yaw_after_rounded = round(goal_after)
+
+        goal_yaw_difference = RotationEnvironment.rotation_min_difference(target_goal_yaw, yaw_after_rounded)
+
+        reward_yaw = -goal_yaw_difference/2
+
 
         # The following step might improve the performance.
 
@@ -45,19 +72,19 @@ class TranslationEnvironment(Environment):
         # if -self.noise_tolerance <= delta_changes <= self.noise_tolerance:
         #     reward = -10
         # else:
-        #     reward = -goal_difference
+        #     reward = -goal_position_difference
         #     #reward = delta_changes / (np.abs(yaw_before - target_goal))
         #     #reward = reward if reward > 0 else 0
 
         # For Translation. noise_tolerance is 15, it would affect the performance to some extent.
-        if goal_difference <= self.noise_tolerance:
+        if goal_position_difference <= self.noise_tolerance and goal_yaw_difference <= self.noise_tolerance:
             logging.info("----------Reached the Goal!----------")
             done = True
             reward = 500
         else:
-            reward = -goal_difference
+            reward = (reward_position + reward_yaw) /2
 
-        logging.info(f"Reward: {reward}, Goal after: {goal_after_array}")
+        logging.info(f"Reward: {reward}, Goal after: {goal_position_after_array}")
 
         return reward, done
 
@@ -111,3 +138,4 @@ class TranslationEnvironment(Environment):
         cv2.putText(image, f'Stage : {mode}', (900, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1, cv2.LINE_AA)
         cv2.imshow("State Image", image)
         cv2.waitKey(10)
+

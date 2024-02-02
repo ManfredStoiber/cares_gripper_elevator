@@ -1,0 +1,11 @@
+{
+    "env_type": 0,
+    "camera_id": 1,
+    "observation_type": 1,
+    "goal_selection_method": 0,
+    "marker_size": 18,
+    "noise_tolerance": 10,
+    "blindable": 0,
+    "camera_matrix": "gripper-config/camera_matrix.txt",
+    "camera_distortion": "gripper-config/camera_distortion.txt"
+}

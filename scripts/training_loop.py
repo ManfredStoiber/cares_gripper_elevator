@@ -19,10 +19,6 @@ from GripperTrainer import GripperTrainer
 def parse_args():
     parser = ArgumentParser()
     
-    parser.add_argument("--learning_config", type=str)
-    parser.add_argument("--env_config",      type=str)
-    parser.add_argument("--gripper_config",  type=str)
-    parser.add_argument("--object_config",   type=str)
     parser.add_argument("--debug",      type=bool)
 
     home_path = os.path.expanduser('~')
@@ -32,12 +28,12 @@ def parse_args():
 def main():
 
     args = parse_args()
-    parent_path = Path(args.env_config).parent.absolute()
+    parent_path = Path("gripper-config/env_4DOF_config_Translation.json").parent.absolute()
 
-    env_config      = pydantic.parse_file_as(path=args.env_config,      type_=EnvironmentConfig)
-    gripper_config  = pydantic.parse_file_as(path=args.gripper_config,  type_=GripperConfig)
-    learning_config = pydantic.parse_file_as(path=args.learning_config, type_=LearningConfig)
-    object_config   = pydantic.parse_file_as(path=args.object_config, type_=ObjectConfig)
+    env_config      = pydantic.parse_file_as(path="gripper-config/env_4DOF_config_Translation.json",      type_=EnvironmentConfig)
+    gripper_config  = pydantic.parse_file_as(path="gripper-config/gripper_4DOF_config_ID1.json",  type_=GripperConfig)
+    learning_config = pydantic.parse_file_as(path="gripper-config/learning_config_example.json", type_=LearningConfig)
+    object_config   = pydantic.parse_file_as(path="gripper-config/obj_config.json", type_=ObjectConfig)
     local_results_path = args.local_results_path
     is_debug = args.debug
 

@@ -1,0 +1,25 @@
+
+{
+    "gripper_type": 0,
+    "gripper_id": 1,
+    "device_name": "/dev/ttyUSB0",
+    "target_device_name": "/dev/ttyUSB1",
+    "baudrate": 1000000,
+    "target_baudrate": 1000000,
+    "servo_type": "XL-320",
+    "action_type": "position",
+
+    "torque_limit": 225,
+    "speed_limit":  225,
+
+    "velocity_min": -100,
+    "velocity_max": 100,
+
+    "num_motors": 4,
+    "min_values": [300,300,300,300],
+    "max_values": [680,680,680,680],
+
+    "home_sequence": [[512,512,512,512]],
+
+    "actuated_target": true
+}

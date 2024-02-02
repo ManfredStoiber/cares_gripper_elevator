@@ -1,10 +1,13 @@
+import matplotlib.pyplot as plt
 from cares_lib.vision.Camera import Camera
-from cares_lib.vision.ArucoDetector import ArucoDetector
-from Objects import MagnetObject, ServoObject, ArucoObject
-from cares_lib.dynamixel.Gripper import Gripper
+from cares_lib.vision.STagDetector import STagDetector
+from Gripper import Gripper
 from cares_lib.dynamixel.gripper_configuration import GripperConfig
+from Servo import Servo
 from configurations import EnvironmentConfig, ObjectConfig
 from abc import ABC, abstractmethod
+from objects import ArucoObject
+import dynamixel_sdk as dxl
 
 import logging
 import random
@@ -16,8 +19,8 @@ from enum import Enum
 import numpy as np
 import cv2
 
-file_path = Path(__file__).parent.resolve()
 
+file_path = Path(__file__).parent.resolve()
 
 VALVE_SERVO_ID = 10
 SLEEP_TIME = 0.5  # in seconds
@@ -31,8 +34,11 @@ def exception_handler(error_message):
                 return function(self, *args, **kwargs)
             except EnvironmentError as error:
                 logging.error(f"Environment for Gripper#{error.gripper.gripper_id}: {error_message}")
-                raise EnvironmentError(error.gripper, f"Environment for Gripper#{error.gripper.gripper_id}: {error_message}") from error
+                raise EnvironmentError(error.gripper,
+                                       f"Environment for Gripper#{error.gripper.gripper_id}: {error_message}") from error
+
         return wrapper
+
     return decorator
 
 
@@ -56,13 +62,23 @@ class Environment(ABC):
     Parameters:
     env_config: Configuration specific to the environment setup.
     gripper_config: Configuration specific to the gripper used.
-    object_config: Configuration specific to the object in the environment.
     """
 
     def __init__(self, env_config: EnvironmentConfig, gripper_config: GripperConfig, object_config: ObjectConfig):
 
+        self.current_color = 1
+
+        self.gripper_config = gripper_config
+        self.object_config = object_config
         self.gripper = Gripper(gripper_config)
         self.camera = Camera(env_config.camera_id, env_config.camera_matrix, env_config.camera_distortion)
+
+        self.object_marker_id = object_config.object_marker_id
+        self.object_observation_mode = object_config.object_observation_mode
+        self.object_device_name = object_config.device_name
+        self.object_baudrate = object_config.baudrate
+
+        self.init_elevator()
 
         self.observation_type = env_config.observation_type
         self.action_type = gripper_config.action_type
@@ -74,11 +90,8 @@ class Environment(ABC):
         self.goal_selection_method = env_config.goal_selection_method
         self.noise_tolerance = env_config.noise_tolerance
 
-        self.gripper.wiggle_home()
-        self.aruco_detector = ArucoDetector(marker_size=env_config.marker_size)
-
-        self.object_marker_id = object_config.object_marker_id
-        self.object_observation_mode = object_config.object_observation_mode
+        self.marker_detector = STagDetector(marker_size=env_config.marker_size)
+        self._return_to_home()
 
         aruco_yaw = None
 
@@ -87,19 +100,37 @@ class Environment(ABC):
             for i in range(0, 10):
                 aruco_yaws.append(self.observed_object_state(marker_only=True)[2])
             aruco_yaw = trim_mean(aruco_yaws, 0.1)
-        self.object_type = object_config.object_type
-        if self.object_type == "aruco":
-            self.target = ArucoObject(
-                self.camera, self.aruco_detector, object_config.object_marker_id)
-        elif self.object_type == "magnet":
-            self.target = MagnetObject(object_config, aruco_yaw)
-        elif self.object_type == "servo":
-            self.target = ServoObject(object_config, VALVE_SERVO_ID)
-        else:
-            raise ValueError("Object Type unknown")
+        self.target = ArucoObject(
+            self.camera, self.marker_detector, self.object_marker_id)
 
         self.object_state_before = self.goal_state = self.get_object_state()
 
+    def restart_gripper(self):
+        self.gripper = Gripper(self.gripper_config)
+        self.init_elevator()
+        self.change_LED_colors(self.current_color)
+
+    def init_elevator(self):
+        ## elevator
+        self.elevator_port_handler = dxl.PortHandler(self.object_device_name)
+        self.elevator_packet_handler = dxl.PacketHandler(2)
+        self.elevator = Servo(self.elevator_port_handler, self.elevator_packet_handler, 2, 5,
+                              1,
+                              225, 225, 4096 * 3, - 4096 * 3,
+                              "XL330-M077-T")
+
+        if not self.elevator_port_handler.openPort():
+            error_message = f"Failed to open port {self.object_device_name}"
+            logging.error(error_message)
+            raise IOError(error_message)
+        logging.info(f"Succeeded to open port {self.object_device_name}")
+
+        if not self.elevator_port_handler.setBaudRate(self.object_baudrate):
+            error_message = f"Failed to change the baudrate to {self.object_baudrate}"
+            logging.error(error_message)
+            raise IOError(error_message)
+        logging.info(f"Succeeded to change the baudrate to {self.object_baudrate}")
+        self.elevator.enable()
 
     @exception_handler("Environment failed to reset")
     def reset(self):
@@ -113,7 +144,7 @@ class Environment(ABC):
         Returns:
         list: The initial state of the environment.
         """
-        self.gripper.wiggle_home()
+        self._return_to_home()
         state = self.get_state()
 
         logging.debug(state)
@@ -123,7 +154,33 @@ class Environment(ABC):
 
         logging.info(f"New Goal Generated: {self.goal_state}")
         return state
-    
+
+    def _return_to_home(self):
+        self.gripper.move([512, 512, 512, 512])  # close gripper
+
+        # check if object between fingertips
+        def is_object_between():
+            try:
+                marker_ids, marker_poses = self.get_marker_poses(max_attempts=100, max_attempts_object=100)
+            except:
+                return False
+            object_state = self.get_object_state()
+            return marker_poses[6]["position"][0] <= object_state[0] <= marker_poses[5]["position"][0]
+
+        # reset until in default position
+        while not (self.gripper.is_home() and is_object_between()):
+            # reset gripper
+            self.gripper.disable_torque()
+            self.elevator.move_extended(4096 + 2500, wait=False)  # lift until little over ground
+            time.sleep(1) # sleep instead of move_extended(.., timeout=1) to ensure waiting time
+            self.elevator.move_extended(4096 + 5600, wait=False)  # lift only so high that it doesn't overshoot wall
+            time.sleep(1)
+            self.gripper.move([300, 512, 680, 512])  # open gripper
+            self.elevator.move_extended(4096 + 2500, wait=False)  # put down until little over ground
+            time.sleep(0.5)
+            self.gripper.move([512, 512, 512, 512])  # close gripper
+            self.elevator.move_extended(4096, wait=False)  # put down
+
 
     def sample_action(self):
         if self.action_type == "velocity":
@@ -218,18 +275,12 @@ class Environment(ABC):
         # X-Y Servo + X-Y Finger-tips + X-Y-Yaw Object + Goal
         state = []
 
-        # Servos + Finger Tips (2) + Object (1)
-        num_markers = self.gripper.num_motors + 3
-        # maker_ids match servo ids (counting from 1)
-        marker_ids = [id for id in range(1, num_markers + 1)]
         while True:
-            logging.debug(f"Attempting to Detect State")
-            frame = self.camera.get_frame()
-            marker_poses = self.aruco_detector.get_marker_poses(frame, self.camera.camera_matrix, self.camera.camera_distortion, display=True)
-
-            # This will check that all the markers are detected correctly
-            if all(ids in marker_poses for ids in marker_ids):
+            try:
+                marker_ids, marker_poses = self.get_marker_poses()
                 break
+            except:
+                self._return_to_home()
 
         # Add the XY poses for each of the markers in marker id into the state
         for id in marker_ids:
@@ -245,6 +296,48 @@ class Environment(ABC):
         state = self.add_goal(state)
 
         return state
+
+    def get_marker_poses(self, max_attempts=np.inf, max_attempts_object=100):
+        # Servos + Finger Tips (2) + Object (1)
+        num_markers = self.gripper.num_motors + 3
+        # maker_ids match servo ids (counting from 1)
+        marker_ids = [id for id in range(1, num_markers + 1)]
+        attempt = 0
+        attempt_object = 0
+        while True:
+            if attempt > max_attempts:
+                logging.warning(f"Could not determine all marker poses after {attempt} attempts")
+                raise Exception(f"Could not determine all marker poses after {attempt} attempts")
+
+            if attempt_object > max_attempts_object:
+                logging.warning(f"Could not determine object marker pose after {attempt_object} attempts")
+                raise Exception(f"Could not determine object marker pose after {attempt_object} attempts")
+
+            attempt += 1
+            logging.debug(f"Attempting to Detect State")
+            frame = self.camera.get_frame()
+            marker_poses = self.marker_detector.get_marker_poses(frame[:, :, [2, 1, 0]], self.camera.camera_matrix,
+                                                                 self.camera.camera_distortion, display=False)
+
+            # This will check that all the markers are detected correctly
+            if all(ids in marker_poses for ids in marker_ids):
+                break
+
+            missing_markers = set(marker_ids).difference(set(marker_poses))
+
+            if attempt % 10 == 1:  # only log every 10th attempt, starting from second
+                logging.warning(f"Attempt {attempt} to detect markers failed. Missing marker(s): {missing_markers}")
+                if attempt > 100:
+                    cv2.imwrite(f"debugimage_{time.time()}.png", frame)
+
+            if self.object_marker_id in missing_markers:
+                attempt_object += 1
+            else:
+                attempt_object = 0
+
+
+
+        return marker_ids, marker_poses
 
     @exception_handler("Failed to get servo and aruco states")
     def servo_aruco_state_space(self):
@@ -293,11 +386,17 @@ class Environment(ABC):
             msg = f"{attempt}/{detection_attempts}" if blindable else f"{attempt}"
             logging.debug(f"Attempting to detect aruco target: {self.object_marker_id}")
 
-            frame = self.camera.get_frame()
-            marker_poses = self.aruco_detector.get_marker_poses(frame, self.camera.camera_matrix,
+            self.last_frame = self.camera.get_frame()
+            marker_poses = self.marker_detector.get_marker_poses(self.last_frame[:, :, [2, 1, 0]], self.camera.camera_matrix,
                                                                 self.camera.camera_distortion, display=False)
             if self.object_marker_id in marker_poses:
                 return marker_poses[self.object_marker_id]
+
+            if attempt % 10 == 1:  # only log every 10th attempt, starting from second
+                print(
+                    f"Attempt {attempt} to detect object marker failed")
+            if attempt > 25:
+                self._return_to_home()
         return None
 
     def observed_object_state(self, marker_only=True):
@@ -314,9 +413,10 @@ class Environment(ABC):
 
             if not marker_only:
                 angle_offsets = [45, 135, 225, 315]
-                state += self.get_object_ends_pose(orientation[2], angle_offsets, center_x=position[0], center_y=position[1])
+                state += self.get_object_ends_pose(orientation[2], angle_offsets, center_x=position[0],
+                                                   center_y=position[1])
             return state
-        return [0]*11
+        return [0] * 11
 
     @exception_handler("Failed to get object states")
     def actual_object_state(self, yaw_only=True):
@@ -338,13 +438,13 @@ class Environment(ABC):
             raise ValueError("Object Observation Mode unknown")
 
     def get_object_ends_pose(self, center_yaw, angle_offsets, center_x=0, center_y=0):
-        object_ends = [0]*8
+        object_ends = [0] * 8
         ends_distance = 5.2
 
         for i in range(4):
             angle = center_yaw + angle_offsets[i]
-            object_ends[i*2] = center_x + np.sin(np.deg2rad(angle)) * ends_distance
-            object_ends[i*2+1] = center_y + np.cos(np.deg2rad(angle)) * ends_distance
+            object_ends[i * 2] = center_x + np.sin(np.deg2rad(angle)) * ends_distance
+            object_ends[i * 2 + 1] = center_y + np.cos(np.deg2rad(angle)) * ends_distance
 
         return object_ends
 
@@ -360,7 +460,8 @@ class Environment(ABC):
             else:
                 servo_min_value = self.gripper.min_values[i]
                 servo_max_value = self.gripper.max_values[i]
-            action_gripper[i] = int((action_norm[i] - min_value_in) * (servo_max_value - servo_min_value) / (max_value_in - min_value_in) + servo_min_value)
+            action_gripper[i] = int((action_norm[i] - min_value_in) * (servo_max_value - servo_min_value) / (
+                        max_value_in - min_value_in) + servo_min_value)
         return action_gripper
 
     def normalize(self, action_gripper):
@@ -375,8 +476,18 @@ class Environment(ABC):
             else:
                 servo_min_value = self.gripper.min_values[i]
                 servo_max_value = self.gripper.max_values[i]
-            action_norm[i] = (action_gripper[i] - servo_min_value) * (max_range_value - min_range_value) / (servo_max_value - servo_min_value) + min_range_value
+            action_norm[i] = (action_gripper[i] - servo_min_value) * (max_range_value - min_range_value) / (
+                        servo_max_value - servo_min_value) + min_range_value
         return action_norm
+
+    def render(self):
+        return self.camera.get_frame()
+
+    def change_LED_colors(self, new_color):
+        self.current_color = new_color
+        self.gripper.change_LED_colours(new_color)
+        self.elevator.LED_colour = new_color
+        self.elevator.turn_on_LED()
 
     @abstractmethod
     def ep_final_distance(self):
